@@ -1,4 +1,5 @@
 #include "window.h"
+#include "log.h"
 
 bool Window::Create(const wchar_t* title, uint32_t width, uint32_t height)
 {
@@ -32,14 +33,18 @@ bool Window::PumpMessages()
 	MSG msg;
 	while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
 	{
-		if (msg.message = WM_QUIT)return false;
+		if (msg.message == WM_QUIT)
+		{
+			LogInfo("WM_QUIT running");
+			return false;
+		}
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
 	return true;
 }
 
-bool Window::ConsumeResize(uint32_t& w, uint32_t h)
+bool Window::ConsumeResize(uint32_t& w, uint32_t& h)
 {
 	if (!m_resized)return false;
 	m_resized = false;
@@ -49,6 +54,7 @@ bool Window::ConsumeResize(uint32_t& w, uint32_t h)
 
 LRESULT Window::WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
+	if (m == WM_CLOSE || m == WM_DESTROY) LogInfo(m == WM_CLOSE ? "WndProc: WM_CLOSE" : "WndProc: WM_DESTROY");
 	Window* self = nullptr;
 	if (m == WM_NCCREATE)
 	{
@@ -67,6 +73,7 @@ LRESULT Window::HandleMessage(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
 	switch (m)
 	{
+	case WM_CLOSE: LogInfo("WM_CLOSE runing"); break;
 	case WM_SIZE:
 		if (wp != SIZE_MINIMIZED)
 		{
@@ -76,6 +83,7 @@ LRESULT Window::HandleMessage(HWND h, UINT m, WPARAM wp, LPARAM lp)
 		}
 		return 0;
 	case WM_DESTROY:
+		LogInfo("Wm_Destroy runing");
 		PostQuitMessage(0);
 		return 0;
 	}

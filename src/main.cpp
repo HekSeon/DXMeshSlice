@@ -3,6 +3,7 @@
 #include "RendererFactory.h"
 #include "window.h"
 #include "SphereGenerator.h"
+#include "log.h"
 
 GraphicAPI AskAPI()
 {
@@ -26,19 +27,35 @@ static XMFLOAT4X4 MakeProj(uint32_t w, uint32_t h)
 	return p;
 }
 
+static void WaitForKey()
+{
+	std::cout << "\nPress Enter...";
+	std::cin.clear();
+	std::cin.ignore(10000, '\n');
+	std::cin.get();
+}
+
 int main()
 {
 	GraphicAPI api = AskAPI();
 
 	Window window;
-	if (!window.Create(L"DXMeshSlice", 1280, 720)) return -1;
+	if (!window.Create(L"DXMeshSlice", 1280, 720)) 
+	{
+		LogError("Window::Create", HRESULT_FROM_WIN32(GetLastError()));
+		WaitForKey();
+		return -1;
+	}
+	LogInfo("Window Created");
 
 	auto renderer = CreateRenderer(api);
 	if (!renderer || !renderer->Initialize(window.GetHandle(), window.Width(), window.Height()))
 	{
-		std::cout << "Renderer not started.\n";
+		LogInfo("Renderer not started");
+		WaitForKey();
 		return -1;
 	}
+	LogInfo("Renderer ready");
 
 	const uint32_t SPHERE_ID = 0;
 	renderer->UploadMesh(SPHERE_ID, GenerateUVSphere(1.0f, 64, 128));
@@ -52,6 +69,8 @@ int main()
 
 	renderer->SetCamera(view, MakeProj(window.Width(), window.Height()));
 
+	LogInfo("Loop Start");
+
 	while (window.PumpMessages())
 	{
 		uint32_t w, h;
@@ -63,5 +82,7 @@ int main()
 	}
 
 	renderer->Shutdown();
+	LogInfo("Shutdown");
+	WaitForKey();
 	return 0;
 }

@@ -7,7 +7,7 @@ class Window
 public:
 	bool Create(const wchar_t* title, uint32_t width, uint32_t height);
 	bool PumpMessages();
-	bool ConsumeResize(uint32_t& w, uint32_t h);
+	bool ConsumeResize(uint32_t& w, uint32_t& h);
 
 	HWND GetHandle() const { return m_hwnd; }
 	uint32_t Width() const { return m_width; }
