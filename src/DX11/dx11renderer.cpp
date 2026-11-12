@@ -1,6 +1,7 @@
 #include "dx11renderer.h"
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
+#include "../log.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -35,7 +36,12 @@ bool DirectX11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height)
 		&m_device,
 		nullptr,
 		&m_context);
-	if (FAILED(hr))return false;
+	if (FAILED(hr))
+	{
+		LogError("D3D11CreateDeviceAndSwapChain", hr);
+		return false;
+	}
+	LogInfo("DX11 Device and swapchain created");
 
 	CreateRendererTarget();
 	m_width = width, m_height = height;
