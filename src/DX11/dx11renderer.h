@@ -6,7 +6,7 @@
 #include <DirectXMath.h>
 #include "../IRenderer.h"
 
-
+using Microsoft::WRL::ComPtr;
 
 class DirectX11Renderer : public IRenderer
 {
@@ -28,18 +28,40 @@ public:
 private:
 	struct GpuMesh
 	{
-		Microsoft::WRL::ComPtr<ID3D11Buffer>vb;
-		Microsoft::WRL::ComPtr<ID3D11Buffer>ib;
-		UINT indexCount = 0;
+		ComPtr<ID3D11Buffer>			vb;
+		ComPtr<ID3D11Buffer>			ib;
+		UINT indexCount					= 0;
 	};
 
-	Microsoft::WRL::ComPtr<ID3D11Device> m_device;
-	Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
-	Microsoft::WRL::ComPtr<IDXGISwapChain>		m_swapChain;
-	Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_rtv;
-	std::unordered_map<uint32_t, GpuMesh> m_meshes;
+	struct CBData
+	{
+		XMFLOAT4X4 world;
+		XMFLOAT4X4 view;
+		XMFLOAT4X4 proj;
+	};
 
 	void CreateRendererTarget();
+	void CreateDepthBuffer();
+	bool CreateShaders();
+	bool CreatePipelineStates();
+
+	ComPtr<ID3D11Device>					m_device;
+	ComPtr<ID3D11DeviceContext>				m_context;
+	ComPtr<IDXGISwapChain>					m_swapChain;
+	ComPtr<ID3D11RenderTargetView>			m_rtv;
+	ComPtr<ID3D11Texture2D>					m_depthTex;
+	ComPtr<ID3D11DepthStencilView>			m_dsv;
+	ComPtr<ID3D11VertexShader>				m_vs;
+	ComPtr<ID3D11PixelShader>				m_ps;
+	ComPtr<ID3D11InputLayout>				m_layout;
+	ComPtr<ID3D11Buffer>					m_cb;
+	ComPtr<ID3D11RasterizerState>			m_raster;
+	
+	std::unordered_map<uint32_t, GpuMesh>	m_meshes;
+
+	XMFLOAT4X4								m_view;
+	XMFLOAT4X4								m_proj;
+
 	uint32_t m_width = 0, m_height = 0;
 
 };

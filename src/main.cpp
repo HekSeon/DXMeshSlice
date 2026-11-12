@@ -12,8 +12,8 @@ GraphicAPI AskAPI()
 		std::cout << "Graphic API selector:\n 1 - DirectX 11\n 2 - DirectX 12\n";
 		int c = 0;
 		std::cin >> c;
-		if (c == 1)return GraphicAPI::DX11;
-		if (c == 2)return GraphicAPI::DX12;
+		if (c == 1) { ClearConsole(); return GraphicAPI::DX11; }
+		if (c == 2) { ClearConsole(); return GraphicAPI::DX12; }
 		std::cin.clear();
 		std::cin.ignore(10000, '\n');
 		std::cout << "Error.\n";
@@ -39,6 +39,7 @@ int main()
 {
 	GraphicAPI api = AskAPI();
 
+
 	Window window;
 	if (!window.Create(L"DXMeshSlice", 1280, 720)) 
 	{
@@ -58,7 +59,10 @@ int main()
 	LogInfo("Renderer ready");
 
 	const uint32_t SPHERE_ID = 0;
-	renderer->UploadMesh(SPHERE_ID, GenerateUVSphere(1.0f, 64, 128));
+	Mesh sphere = GenerateUVSphere(1.0f, 64, 128);
+	std::cout << "vertex: " << sphere.vertices.size()
+		<< " index: " << sphere.indices.size() << "\n";
+	renderer->UploadMesh(SPHERE_ID, sphere);
 
 	XMFLOAT4X4 view, world;
 	XMStoreFloat4x4(&view,
@@ -73,9 +77,12 @@ int main()
 
 	while (window.PumpMessages())
 	{
-		uint32_t w, h;
-		if (window.ConsumeResize(w, h))renderer->Resize(w, h);
-
+		uint32_t w = 0, h = 0;
+		if (window.ConsumeResize(w, h)&&w>0&&h>0)
+		{
+			renderer->Resize(w, h);
+			renderer->SetCamera(view, MakeProj(w, h));
+		}
 		renderer->BeginFrame();
 		renderer->Draw(SPHERE_ID, world);
 		renderer->EndFrame();

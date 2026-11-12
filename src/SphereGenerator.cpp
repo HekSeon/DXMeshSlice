@@ -6,6 +6,7 @@ using namespace DirectX;
 Mesh GenerateUVSphere(float radius, uint32_t stacks, uint32_t slices)
 {
 	Mesh m;
+	m.vertices.reserve((stacks + 1) * (slices + 1));
 
 	for (uint32_t i = 0; i <= stacks;i++)
 	{
@@ -27,7 +28,7 @@ Mesh GenerateUVSphere(float radius, uint32_t stacks, uint32_t slices)
 		{
 			uint32_t a = i * ring + j;
 			uint32_t b = a + ring;
-			m.indices.insert(m.indices.end(), { a,a + 1,b,b + 1,b });
+			m.indices.insert(m.indices.end(), { a,a + 1,b,a + 1,b + 1,b });
 		}
 	}
 

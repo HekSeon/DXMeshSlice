@@ -78,7 +78,7 @@ LRESULT Window::HandleMessage(HWND h, UINT m, WPARAM wp, LPARAM lp)
 		if (wp != SIZE_MINIMIZED)
 		{
 			m_width = LOWORD(lp);
-			m_height = LOWORD(lp);
+			m_height = HIWORD(lp);
 			m_resized = true;
 		}
 		return 0;
