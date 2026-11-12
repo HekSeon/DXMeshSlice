@@ -2,7 +2,7 @@
 #include "../IRenderer.h"
 
 
-class DXRenderer : public IRenderer
+class DX12Renderer : public IRenderer
 {
 public:
 	bool Initialize(HWND hwnd, uint32_t width, uint32_t height);
