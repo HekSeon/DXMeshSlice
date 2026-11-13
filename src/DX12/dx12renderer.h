@@ -2,6 +2,7 @@
 
 #include <d3d12.h>
 #include <dxgi.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <unordered_map>
 #include <DirectXMath.h>
@@ -12,7 +13,7 @@ using Microsoft::WRL::ComPtr;
 class DX12Renderer : public IRenderer
 {
 public:
-	bool Initialize(HWND hwnd, uint32_t width, uint32_t height);
+	bool Initialize(HWND hwnd, uint32_t width, uint32_t height)override;
 	void Resize(uint32_t width, uint32_t height) override;
 	void Shutdown() override;
 
@@ -56,13 +57,13 @@ private:
 	void WaitForGPU();
 	ComPtr<ID3D12Resource> CreateUploadBuffer(const void* data, UINT64 size);
 	
-	ComPtr<IDXGIFactory>					m_factory;
+	ComPtr<IDXGIFactory4>					m_factory;
 	ComPtr<ID3D12Device>					m_device;
 	ComPtr<ID3D12CommandQueue>				m_queue;
-	ComPtr<IDXGISwapChain>					m_swapchain;
+	ComPtr<IDXGISwapChain3>					m_swapchain;
 
 	ComPtr<ID3D12DescriptorHeap>			m_rtvHeap;
-	ComPtr<ID3D12DescriptorHeap>			m_dtvHeap;
+	ComPtr<ID3D12DescriptorHeap>			m_dsvHeap;
 	ComPtr<ID3D12Resource>					m_rtvs[kframeCount];
 	ComPtr<ID3D12Resource>					m_depth;
 	UINT									m_rtvInc = 0;
