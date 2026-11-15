@@ -5,6 +5,16 @@
 #include "SphereGenerator.h"
 #include "log.h"
 #include "MeshSlicer.h"
+#include <vector>
+#include <chrono>
+
+struct Piece
+{
+	Mesh mesh;
+	uint32_t id;
+	XMFLOAT3 offset;
+};
+
 
 GraphicAPI AskAPI()
 {
@@ -36,6 +46,32 @@ static void WaitForKey()
 	std::cin.get();
 }
 
+static bool PlaneFrameScreenLine(int x0, int y0, int x1, int y1,
+	uint32_t w, uint32_t h, const XMFLOAT4X4& view, Plane& out)
+{
+	const float tanHalf = tanf(XM_PIDIV4 * 0.5f);
+	const float aspect = float(w) / float(h);
+
+	XMMATRIX invView = XMMatrixInverse(nullptr, XMLoadFloat4x4(&view));
+	XMVECTOR camPos = invView.r[3];
+
+	auto rayDir = [&](int px, int py)
+		{
+			float nx = 2.0f * px / float(w) - 1.0f;
+			float ny = 1.0f - 2.0f * py / float(h);
+			XMVECTOR d = XMVectorSet(nx * tanHalf * aspect, ny * tanHalf, 1.0f, 0.0f);
+			return XMVector3Normalize(XMVector3TransformNormal(d, invView));
+		};
+
+	XMVECTOR n = XMVector3Cross(rayDir(x0, y0), rayDir(x1, y1));
+	if (XMVectorGetX(XMVector3Length(n)) < 1e-4f)return false;
+
+	n = XMVector3Normalize(n);
+	XMStoreFloat3(&out.normal, n);
+	out.d = XMVectorGetX(XMVector3Dot(n, camPos));
+	return true;
+}
+
 int main()
 {
 	GraphicAPI api = AskAPI();
@@ -59,34 +95,17 @@ int main()
 	}
 	LogInfo("Renderer ready");
 
-	const uint32_t SPHERE_ID = 0, POS_ID = 1, NEG_ID=2;
-	Mesh sphere = GenerateUVSphere(1.0f, 64, 128);
-	std::cout << "vertex: " << sphere.vertices.size()
-		<< " index: " << sphere.indices.size() << "\n";
-	//renderer->UploadMesh(SPHERE_ID, sphere);
+	std::vector<Piece> pieces;
+	uint32_t nextid = 0;
 
-	Plane plane{ XMFLOAT3(1,0,0),0.0f };
-	Mesh poshalf, neghalf;
-	const bool sliced = SliceMesh(sphere, plane, poshalf, neghalf);
+	auto addPiece = [&](Mesh&& m, XMFLOAT3 offset)
+		{
+			const uint32_t id = nextid++;
+			renderer->UploadMesh(id, m);
+			pieces.push_back({ std::move(m),id,offset });
+		};
 
-	if (sliced)
-	{
-		std::cout << "pos:" << poshalf.vertices.size() << "v, " << poshalf.indices.size() / 3<< " tri\n" 
-			<< "neg: " << neghalf.vertices.size() << "v," << neghalf.indices.size() / 3 << " tri\n";
-		renderer->UploadMesh(POS_ID, poshalf);
-		renderer->UploadMesh(NEG_ID, neghalf);
-	}
-	else
-	{
-		LogInfo("SliceError");
-		renderer->UploadMesh(SPHERE_ID, sphere);
-	}
-
-	XMFLOAT4X4 worldPos, worldNeg;
-	XMStoreFloat4x4(&worldPos, XMMatrixTranslation(+0.15f, 0, 0));
-	XMStoreFloat4x4(&worldNeg, XMMatrixTranslation(-0.15f, 0, 0));
-
-
+	addPiece(GenerateUVSphere(1.0f, 64, 128), XMFLOAT3(0, 0, 0));
 
 	XMFLOAT4X4 view, world;
 	XMStoreFloat4x4(&view,
@@ -109,14 +128,72 @@ int main()
 		}
 		int x0, y0, x1, y1;
 		if (window.ConsumeLine(x0, y0, x1, y1))
-			std::cout << "line: (" << x0 << "," << y0 << ")->(" << x1 << "," << y1 << ")\n";
-		renderer->BeginFrame();
-		if (sliced)
 		{
-			renderer->Draw(POS_ID, worldPos);
-			renderer->Draw(NEG_ID, worldNeg);
+			std::cout << "line: (" << x0 << "," << y0 << ")->(" << x1 << "," << y1 << ")\n";
+			Plane pl;
+			if (abs(x1 - x0) + abs(y1 - y0) < 5)
+			{
+
+			}
+			else if (!PlaneFrameScreenLine(x0, y0, x1, y1, window.Width(), window.Height(), view, pl))
+			{
+				LogInfo("Line gecersiz");
+			}
+			else
+			{
+				auto t0 = std::chrono::high_resolution_clock::now();
+				std::vector<Piece> old = std::move(pieces);
+				pieces.clear();
+
+				const float gap = 0.1f;
+				bool any = false;
+				for (Piece& p : old)
+				{
+					Plane local = pl;
+					local.d = pl.d - (pl.normal.x * p.offset.x +
+						pl.normal.y * p.offset.y +
+						pl.normal.z * p.offset.z);
+					Mesh a, b;
+					if (SliceMesh(p.mesh, local, a, b))
+					{
+						renderer->RemoveMesh(p.id);
+						addPiece(std::move(a), XMFLOAT3(p.offset.x + pl.normal.x * gap,
+							p.offset.y + pl.normal.y * gap,
+							p.offset.z + pl.normal.z * gap));
+						addPiece(std::move(b), XMFLOAT3(p.offset.x - pl.normal.x * gap,
+							p.offset.y - pl.normal.y * gap,
+							p.offset.z - pl.normal.z * gap));
+				
+					any = true;
+					}
+					else
+					{
+						pieces.push_back(std::move(p));
+					}
+					auto t1 = std::chrono::high_resolution_clock::now();
+					std::cout << "cut: "
+						<< std::chrono::duration<double, std::milli>(t1 - t0).count()
+						<< " ms, piece count: " << pieces.size() << "\n";
+				}
+					if(!any) LogInfo("Line cannot cut the SPHIRE");
+			}
+			
 		}
-		else renderer->Draw(SPHERE_ID, world);
+
+		if (GetAsyncKeyState('R') & 1)
+		{
+			GetForegroundWindow() == window.GetHandle();
+			for (Piece& p : pieces)renderer->RemoveMesh(p.id);
+			pieces.clear();
+			addPiece(GenerateUVSphere(1.0f, 64, 128), XMFLOAT3(0, 0, 0));
+		}
+		renderer->BeginFrame();
+		for (const Piece& p : pieces)
+		{
+			XMFLOAT4X4 wm;
+			XMStoreFloat4x4(&wm, XMMatrixTranslation(p.offset.x, p.offset.y, p.offset.z));
+			renderer->Draw(p.id, wm);
+		}
 		renderer->EndFrame();
 	}
 
@@ -125,3 +202,4 @@ int main()
 	WaitForKey();
 	return 0;
 }
+

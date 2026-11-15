@@ -56,7 +56,7 @@ bool Window::ConsumeResize(uint32_t& w, uint32_t& h)
 bool Window::ConsumeLine(int& x0, int& y0, int& x1, int& y1)
 {
 	if (!m_lineReady)return false;
-	m_lineReady = true;
+	m_lineReady = false;
 	x0 = m_sx;y0 = m_sy;x1 = m_ex;y1 = m_ey;
 	return true;
 }
