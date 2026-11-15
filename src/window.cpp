@@ -61,6 +61,14 @@ bool Window::ConsumeLine(int& x0, int& y0, int& x1, int& y1)
 	return true;
 }
 
+bool Window::ConsumeOrbit(int& dx, int& dy)
+{
+	if (m_orbitDx == 0 && m_orbitDy == 0)return false;
+	dx = m_orbitDx;	dy = m_orbitDy;
+	m_orbitDx = m_orbitDy = 0;
+	return true;
+}
+
 LRESULT Window::WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
 	if (m == WM_CLOSE || m == WM_DESTROY) LogInfo(m == WM_CLOSE ? "WndProc: WM_CLOSE" : "WndProc: WM_DESTROY");
@@ -103,6 +111,13 @@ LRESULT Window::HandleMessage(HWND h, UINT m, WPARAM wp, LPARAM lp)
 		return 0;
 	case WM_MOUSEMOVE:
 		if (m_dragging) { m_ex = GET_X_LPARAM(lp); m_ey = GET_Y_LPARAM(lp); }
+		if (m_orbiting)
+		{
+			int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+			m_orbitDx += x - m_lastX;
+			m_orbitDy += y - m_lastY;
+			m_lastX = x; m_lastY = y;
+		}
 		return 0;
 
 	case WM_LBUTTONUP:
@@ -113,6 +128,15 @@ LRESULT Window::HandleMessage(HWND h, UINT m, WPARAM wp, LPARAM lp)
 			m_lineReady = true;
 			ReleaseCapture();
 		}
+		return 0;
+	case WM_RBUTTONDOWN:
+		m_orbiting = true;
+		m_lastX = GET_X_LPARAM(lp);
+		m_lastY = GET_Y_LPARAM(lp);
+		SetCapture(h);
+		return 0;
+	case WM_RBUTTONUP:
+		if (m_orbiting) { m_orbiting = false;ReleaseCapture(); }
 		return 0;
 	}
 		

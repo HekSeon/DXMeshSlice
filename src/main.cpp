@@ -7,6 +7,7 @@
 #include "MeshSlicer.h"
 #include <vector>
 #include <chrono>
+#include <algorithm>
 
 struct Piece
 {
@@ -107,12 +108,21 @@ int main()
 
 	addPiece(GenerateUVSphere(1.0f, 64, 128), XMFLOAT3(0, 0, 0));
 
+	float yaw = 0.0f, pitch = 0.0f;
+	const float radius = 4.0f;
+	const float sensitivity = 0.01f;
+
 	XMFLOAT4X4 view, world;
-	XMStoreFloat4x4(&view,
-		XMMatrixLookAtLH(XMVectorSet(0, 0, -4, 1),
-			XMVectorSet(0, 0, 0, 1),
-			XMVectorSet(0, 1, 0, 0)));
-	XMStoreFloat4x4(&world, XMMatrixIdentity());
+	auto buildView = [&]()
+		{
+			float cp = cosf(pitch);
+			XMVECTOR eye = XMVectorSet(radius * cp * sinf(yaw),
+				radius * sinf(pitch),
+				-radius * cp * cosf(yaw), 1.0f);
+			XMStoreFloat4x4(&view,
+				XMMatrixLookAtLH(eye, XMVectorZero(), XMVectorSet(0, 1, 0, 0)));
+		};
+	buildView();
 
 	renderer->SetCamera(view, MakeProj(window.Width(), window.Height()));
 
@@ -125,6 +135,18 @@ int main()
 		{
 			renderer->Resize(w, h);
 			renderer->SetCamera(view, MakeProj(w, h));
+		}
+		int dx, dy;
+		if (window.ConsumeOrbit(dx, dy))
+		{
+			yaw -= dx * sensitivity;
+			pitch += dy * sensitivity;
+
+			const float limit = XM_PIDIV2 - 0.05f;
+			pitch = std::clamp(pitch, -limit, limit);
+
+			buildView();
+			renderer->SetCamera(view, MakeProj(window.Width(), window.Height()));
 		}
 		int x0, y0, x1, y1;
 		if (window.ConsumeLine(x0, y0, x1, y1))
@@ -180,9 +202,8 @@ int main()
 			
 		}
 
-		if (GetAsyncKeyState('R') & 1)
+		if ((GetAsyncKeyState('R') & 1)&&GetForegroundWindow() == window.GetHandle())
 		{
-			GetForegroundWindow() == window.GetHandle();
 			for (Piece& p : pieces)renderer->RemoveMesh(p.id);
 			pieces.clear();
 			addPiece(GenerateUVSphere(1.0f, 64, 128), XMFLOAT3(0, 0, 0));

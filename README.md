@@ -6,7 +6,7 @@ into two pieces, each with a filled (capped) cut surface. Every new piece can be
 
 The same slicing and rendering code runs on both APIs. The API is selected from a console prompt at startup.
 
-![DXMeshSlice](docs/preview.png)
+![DXMeshSlice](docs/preview.mp4)
 
 ## Features
 
