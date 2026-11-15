@@ -1,4 +1,5 @@
 #include "window.h"
+#include <windowsx.h>
 #include "log.h"
 
 bool Window::Create(const wchar_t* title, uint32_t width, uint32_t height)
@@ -52,6 +53,14 @@ bool Window::ConsumeResize(uint32_t& w, uint32_t& h)
 	return true;
 }
 
+bool Window::ConsumeLine(int& x0, int& y0, int& x1, int& y1)
+{
+	if (!m_lineReady)return false;
+	m_lineReady = true;
+	x0 = m_sx;y0 = m_sy;x1 = m_ex;y1 = m_ey;
+	return true;
+}
+
 LRESULT Window::WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
 	if (m == WM_CLOSE || m == WM_DESTROY) LogInfo(m == WM_CLOSE ? "WndProc: WM_CLOSE" : "WndProc: WM_DESTROY");
@@ -86,8 +95,26 @@ LRESULT Window::HandleMessage(HWND h, UINT m, WPARAM wp, LPARAM lp)
 		LogInfo("Wm_Destroy runing");
 		PostQuitMessage(0);
 		return 0;
+	case WM_LBUTTONDOWN:
+		m_dragging = true;
+		m_sx = m_ex = GET_X_LPARAM(lp);
+		m_sy = m_ey = GET_Y_LPARAM(lp);
+		SetCapture(h);
+		return 0;
+	case WM_MOUSEMOVE:
+		if (m_dragging) { m_ex = GET_X_LPARAM(lp); m_ey = GET_Y_LPARAM(lp); }
+		return 0;
+
+	case WM_LBUTTONUP:
+		if (m_dragging)
+		{
+			m_ex = GET_X_LPARAM(lp);m_ey = GET_Y_LPARAM(lp);
+			m_dragging = false;
+			m_lineReady = true;
+			ReleaseCapture();
+		}
+		return 0;
 	}
+		
 	return DefWindowProc(h, m, wp, lp);
 }
-
-

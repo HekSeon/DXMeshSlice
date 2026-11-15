@@ -8,6 +8,7 @@ public:
 	bool Create(const wchar_t* title, uint32_t width, uint32_t height);
 	bool PumpMessages();
 	bool ConsumeResize(uint32_t& w, uint32_t& h);
+	bool ConsumeLine(int& x0, int& y0, int& x1, int& y1);
 
 	HWND GetHandle() const { return m_hwnd; }
 	uint32_t Width() const { return m_width; }
@@ -20,4 +21,8 @@ private:
 	HWND m_hwnd	= nullptr;
 	uint32_t m_width = 0, m_height = 0;
 	bool m_resized = false;
+
+	bool m_dragging = false;
+	bool m_lineReady = false;
+	int m_sx = 0, m_sy = 0, m_ex = 0, m_ey = 0;
 };

@@ -4,6 +4,7 @@
 #include "window.h"
 #include "SphereGenerator.h"
 #include "log.h"
+#include "MeshSlicer.h"
 
 GraphicAPI AskAPI()
 {
@@ -58,11 +59,34 @@ int main()
 	}
 	LogInfo("Renderer ready");
 
-	const uint32_t SPHERE_ID = 0;
+	const uint32_t SPHERE_ID = 0, POS_ID = 1, NEG_ID=2;
 	Mesh sphere = GenerateUVSphere(1.0f, 64, 128);
 	std::cout << "vertex: " << sphere.vertices.size()
 		<< " index: " << sphere.indices.size() << "\n";
-	renderer->UploadMesh(SPHERE_ID, sphere);
+	//renderer->UploadMesh(SPHERE_ID, sphere);
+
+	Plane plane{ XMFLOAT3(1,0,0),0.0f };
+	Mesh poshalf, neghalf;
+	const bool sliced = SliceMesh(sphere, plane, poshalf, neghalf);
+
+	if (sliced)
+	{
+		std::cout << "pos:" << poshalf.vertices.size() << "v, " << poshalf.indices.size() / 3<< " tri\n" 
+			<< "neg: " << neghalf.vertices.size() << "v," << neghalf.indices.size() / 3 << " tri\n";
+		renderer->UploadMesh(POS_ID, poshalf);
+		renderer->UploadMesh(NEG_ID, neghalf);
+	}
+	else
+	{
+		LogInfo("SliceError");
+		renderer->UploadMesh(SPHERE_ID, sphere);
+	}
+
+	XMFLOAT4X4 worldPos, worldNeg;
+	XMStoreFloat4x4(&worldPos, XMMatrixTranslation(+0.15f, 0, 0));
+	XMStoreFloat4x4(&worldNeg, XMMatrixTranslation(-0.15f, 0, 0));
+
+
 
 	XMFLOAT4X4 view, world;
 	XMStoreFloat4x4(&view,
@@ -83,8 +107,16 @@ int main()
 			renderer->Resize(w, h);
 			renderer->SetCamera(view, MakeProj(w, h));
 		}
+		int x0, y0, x1, y1;
+		if (window.ConsumeLine(x0, y0, x1, y1))
+			std::cout << "line: (" << x0 << "," << y0 << ")->(" << x1 << "," << y1 << ")\n";
 		renderer->BeginFrame();
-		renderer->Draw(SPHERE_ID, world);
+		if (sliced)
+		{
+			renderer->Draw(POS_ID, worldPos);
+			renderer->Draw(NEG_ID, worldNeg);
+		}
+		else renderer->Draw(SPHERE_ID, world);
 		renderer->EndFrame();
 	}
 
