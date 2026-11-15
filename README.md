@@ -115,7 +115,6 @@ src/
 
 - Draw the cut line on screen while dragging
 - Frames in flight on DX12
-- Rotate the camera or pieces
 - Physics for falling pieces
 
 ## License
