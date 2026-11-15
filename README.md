@@ -1,3 +1,7 @@
+
+
+
+
 # DXMeshSlice
 
 A small real-time mesh slicing demo written in C++ with **DirectX 11** and **DirectX 12**.
@@ -6,7 +10,9 @@ into two pieces, each with a filled (capped) cut surface. Every new piece can be
 
 The same slicing and rendering code runs on both APIs. The API is selected from a console prompt at startup.
 
-![DXMeshSlice](docs/preview.mp4)
+https://github.com/user-attachments/assets/605e5e24-734d-4c97-ac17-54cf603c8ba3
+
+![DXMeshSlice](docs/preview.png)
 
 ## Features
 
