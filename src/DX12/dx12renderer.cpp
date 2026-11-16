@@ -1,6 +1,8 @@
 #include "dx12renderer.h"
 #include <d3dcompiler.h>
 #include <cstring>
+#include <algorithm>
+#include <iterator>
 #include "../shadersource.h"
 #include "../log.h"
 
@@ -54,6 +56,7 @@ bool DX12Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height)
 	if (!CreateRendererTarget())return false;
 	if (!CreateDepthBuffer())return false;
 	if (!CreateCommandObject())return false;
+	if (!CreateGpuTimer())return false;
 	if (!CreateRootSignature())return false;
 	if (!CreatePipelineState())return false;
 
@@ -274,23 +277,127 @@ bool DX12Renderer::CreatePipelineState()
 	return true;
 }
 
-void DX12Renderer::WaitForGPU()
+bool DX12Renderer::WaitForGPU()
 {
-	if (!m_queue || !m_fence)return;
+	if (m_gpuIdle)return true;
+	if (!m_queue || !m_fence || !m_fenceEvent)return false;
+
 	const UINT64 v = ++m_fenceValue;
-	m_queue->Signal(m_fence.Get(), v);
-	if (m_fence->GetCompletedValue() < v)
+	HRESULT hr = m_queue->Signal(m_fence.Get(), v);
+	if (FAILED(hr))
 	{
-		m_fence->SetEventOnCompletion(v, m_fenceEvent);
-		WaitForSingleObject(m_fenceEvent, INFINITE);
+		LogError("CommandQueue::Signal(fence)", hr);
+		return false;
 	}
+	const UINT64 completed = m_fence->GetCompletedValue();
+	if (completed == UINT64_MAX)
+	{
+		LogError("Fence::GetCompletedValue", DXGI_ERROR_DEVICE_REMOVED);
+		return false;
+	}
+	if (completed < v)
+	{
+		hr = m_fence->SetEventOnCompletion(v, m_fenceEvent);
+		if (FAILED(hr))
+		{
+			LogError("Fence::SetEventOnCompletion", hr);
+			return false;
+		}
+		if (WaitForSingleObject(m_fenceEvent, INFINITE) != WAIT_OBJECT_0)
+		{
+			LogError("WaitForSingleObject(fence)", HRESULT_FROM_WIN32(GetLastError()));
+			return false;
+		}
+	}
+	const UINT64 confirmed = m_fence->GetCompletedValue();
+	if (confirmed == UINT64_MAX || confirmed < v)
+	{
+		LogError("Fence completion check", confirmed == UINT64_MAX ? DXGI_ERROR_DEVICE_REMOVED : E_FAIL);
+		return false;
+	}
+	m_gpuIdle = true;
+	return true;
+}
+
+bool DX12Renderer::CreateGpuTimer()
+{
+	HRESULT hr = m_queue->GetTimestampFrequency(&m_timestampFrequency);
+	if (FAILED(hr) || m_timestampFrequency == 0)
+	{
+		LogError("GetTimeStampFrequency", FAILED(hr) ? hr : E_FAIL);
+		return false;
+	}
+
+	D3D12_QUERY_HEAP_DESC query{};
+	query.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+	query.Count = 2;
+
+	hr = m_device->CreateQueryHeap(&query, IID_PPV_ARGS(&m_timestampHeap));
+	if (FAILED(hr))
+	{
+		LogError("CreateQueryHeap(timestamp)", hr);
+		return false;
+	}
+
+	D3D12_HEAP_PROPERTIES heap{};
+	heap.Type = D3D12_HEAP_TYPE_READBACK;
+
+	D3D12_RESOURCE_DESC buffer{};
+	buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	buffer.Width = sizeof(UINT64) * 2;
+	buffer.Height = 1;
+	buffer.DepthOrArraySize = 1;
+	buffer.MipLevels = 1;
+	buffer.SampleDesc.Count = 1;
+	buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+	hr = m_device->CreateCommittedResource(
+		&heap,
+		D3D12_HEAP_FLAG_NONE,
+		&buffer,
+		D3D12_RESOURCE_STATE_COPY_DEST,
+		nullptr,
+		IID_PPV_ARGS(&m_timestampReadback));
+
+	if (FAILED(hr))
+	{
+		LogError("CreateCommittedResource(timestamp)", hr);
+		return false;
+	}
+
+	return true;
+}
+
+void DX12Renderer::ReadGpuTimer()
+{
+	void* data = nullptr;
+	D3D12_RANGE readRange{ 0, sizeof(UINT64) * 2 };
+
+	HRESULT hr = m_timestampReadback->Map(0, &readRange, &data);
+	if (FAILED(hr))
+	{
+		m_gpuMs = -1.0;
+		return;
+	}
+
+	const UINT64* timestamps = static_cast<const UINT64*>(data);
+
+	if (timestamps[1] >= timestamps[0])
+	{
+		m_gpuMs = double(timestamps[1] - timestamps[0])
+			* 1000.0 / double(m_timestampFrequency);
+	}
+	else m_gpuMs = -1.0;
+
+	D3D12_RANGE writtenRange{ 0,0 };
+	m_timestampReadback->Unmap(0, &writtenRange);
 }
 
 
 void DX12Renderer::Resize(uint32_t width, uint32_t height)
 {
-	if (!m_swapchain || width == 0 || height == 0)return;
-	WaitForGPU();
+	if (!m_swapchain || width == 0 || height == 0 || m_frameActive)return;
+	if (!WaitForGPU())return;
 
 	for (auto& r : m_rtvs)r.Reset();
 
@@ -308,10 +415,24 @@ void DX12Renderer::Resize(uint32_t width, uint32_t height)
 
 void DX12Renderer::Shutdown()
 {
-	WaitForGPU();
+	const bool idle = WaitForGPU();
+	if (idle)
+	{
+		for (UploadPage& page : m_uploadPages)
+		{
+			if (page.mapped)
+			{
+				page.resource->Unmap(0, nullptr);
+				page.mapped = nullptr;
+			}
+		}
+	}
 	if (m_fenceEvent) { CloseHandle(m_fenceEvent); m_fenceEvent = nullptr; }
 
 	m_meshes.clear();
+	m_uploadPages.clear();
+	m_frameActive = false;
+	m_gpuIdle = true;
 	m_pso.Reset(); m_rootSig.Reset();
 	m_cmdList.Reset(); m_allocator.Reset();
 	m_depth.Reset();
@@ -320,76 +441,183 @@ void DX12Renderer::Shutdown()
 	m_swapchain.Reset();
 	m_fence.Reset();
 	m_queue.Reset();
+	m_timestampReadback.Reset();
+	m_timestampHeap.Reset();
+	m_timestampFrequency = 0;
+	m_gpuMs = -1.0;
 	m_device.Reset();
 	m_factory.Reset();
 }
 
-ComPtr<ID3D12Resource> DX12Renderer::CreateUploadBuffer(const void* data, UINT64 size)
+bool DX12Renderer::CreateUploadPage(UINT64 minimumSize)
 {
+	constexpr UINT64 pageSize = 4ull * 1024ull * 1024ull;
+	if (minimumSize > UINT64_MAX - 15)return false;
+	const UINT64 size = (std::max)(pageSize, (minimumSize + 15ull) & ~15ull);
+
 	D3D12_HEAP_PROPERTIES hp{};
 	hp.Type = D3D12_HEAP_TYPE_UPLOAD;
-
 	D3D12_RESOURCE_DESC rd{};
 	rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
 	rd.Width = size;
 	rd.Height = 1;
 	rd.DepthOrArraySize = 1;
 	rd.MipLevels = 1;
-	rd.Format = DXGI_FORMAT_UNKNOWN;
 	rd.SampleDesc.Count = 1;
 	rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-	ComPtr<ID3D12Resource> res;
-	HRESULT hr = m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_GENERIC_READ,
-		nullptr, IID_PPV_ARGS(&res));
-	if (FAILED(hr)) { LogError("CreateCommittedResource(upload)", hr);return nullptr; }
-
-	void* p = nullptr;
+	UploadPage page;
+	HRESULT hr = m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+		D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&page.resource));
+	if (FAILED(hr))
+	{
+		LogError("CreateCommittedResource(upload page)", hr);
+		return false;
+	}
+	void* mapped = nullptr;
 	D3D12_RANGE noRead{ 0,0 };
-	hr = res->Map(0, &noRead, &p);
-	if (FAILED(hr)) { LogError("Resource::Map", hr); return nullptr; }
-	memcpy(p, data, (size_t)size);
-	res->Unmap(0, nullptr);
-	return res;
+	hr = page.resource->Map(0, &noRead, &mapped);
+	if (FAILED(hr))
+	{
+		LogError("Resource::Map(upload page)", hr);
+		return false;
+	}
+	page.mapped = static_cast<uint8_t*>(mapped);
+	page.size = size;
+	page.freeRanges.emplace(0, size);
+	m_uploadPages.push_back(std::move(page));
+	return true;
+}
+
+bool DX12Renderer::AllocateMeshStorage(UINT64 size, size_t& pageIndex, UINT64& offset)
+{
+	if (size == 0 || size > UINT64_MAX - 15)return false;
+	size = (size + 15ull) & ~15ull;
+	auto findRange = [&](size_t index) -> bool
+	{
+		auto& ranges = m_uploadPages[index].freeRanges;
+		for (auto it = ranges.begin(); it != ranges.end(); ++it)
+		{
+			if (it->second < size)continue;
+			offset = it->first;
+			const UINT64 remaining = it->second - size;
+			const UINT64 nextOffset = it->first + size;
+			ranges.erase(it);
+			if (remaining != 0)ranges.emplace(nextOffset, remaining);
+			pageIndex = index;
+			return true;
+		}
+		return false;
+	};
+	for (size_t i = 0; i < m_uploadPages.size(); ++i)
+		if (findRange(i))return true;
+	if (!CreateUploadPage(size))return false;
+	return findRange(m_uploadPages.size() - 1);
+}
+
+void DX12Renderer::FreeMeshAllocation(const GpuMesh& mesh)
+{
+	if (mesh.pageIndex >= m_uploadPages.size() || mesh.allocationSize == 0)return;
+	auto& ranges = m_uploadPages[mesh.pageIndex].freeRanges;
+	UINT64 offset = mesh.allocationOffset;
+	UINT64 size = mesh.allocationSize;
+	auto next = ranges.lower_bound(offset);
+	if (next != ranges.begin())
+	{
+		auto previous = std::prev(next);
+		if (previous->first + previous->second == offset)
+		{
+			offset = previous->first;
+			size += previous->second;
+			ranges.erase(previous);
+		}
+	}
+	next = ranges.lower_bound(offset);
+	if (next != ranges.end() && offset + size == next->first)
+	{
+		size += next->second;
+		ranges.erase(next);
+	}
+	ranges.emplace(offset, size);
 }
 
 void DX12Renderer::UploadMesh(uint32_t id, const Mesh& mesh)
 {
-	WaitForGPU();
+	if (m_frameActive || !WaitForGPU())return;
+	if (mesh.vertices.empty() || mesh.indices.empty() ||
+		mesh.vertices.size() > UINT_MAX / sizeof(Vertex) ||
+		mesh.indices.size() > UINT_MAX / sizeof(uint32_t))
+	{
+		LogInfo("UploadMesh skipped: empty mesh or buffer size overflow");
+		return;
+	}
+	const UINT vbsize = static_cast<UINT>(mesh.vertices.size() * sizeof(Vertex));
+	const UINT ibsize = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
+	const UINT64 indexOffset = (UINT64(vbsize) + 3ull) & ~3ull;
+	if (indexOffset > UINT64_MAX - ibsize || indexOffset + ibsize > UINT64_MAX - 15ull)
+	{
+		LogInfo("UploadMesh skipped: allocation size overflow");
+		return;
+	}
+	const UINT64 allocationSize = (indexOffset + ibsize + 15ull) & ~15ull;
+	size_t pageIndex = 0;
+	UINT64 allocationOffset = 0;
+	if (!AllocateMeshStorage(allocationSize, pageIndex, allocationOffset))
+	{
+		LogInfo("UploadMesh skipped: upload page allocation failed");
+		return;
+	}
+
+	UploadPage& page = m_uploadPages[pageIndex];
+	memcpy(page.mapped + allocationOffset, mesh.vertices.data(), vbsize);
+	memcpy(page.mapped + allocationOffset + indexOffset, mesh.indices.data(), ibsize);
 
 	GpuMesh g;
-	const UINT vbsize = UINT(mesh.vertices.size() * sizeof(Vertex));
-	const UINT ibsize = UINT(mesh.indices.size() * sizeof(uint32_t));
+	g.vbv = { page.resource->GetGPUVirtualAddress() + allocationOffset, vbsize, sizeof(Vertex) };
+	g.ibv = { page.resource->GetGPUVirtualAddress() + allocationOffset + indexOffset, ibsize, DXGI_FORMAT_R32_UINT };
+	g.indexCount = static_cast<UINT>(mesh.indices.size());
+	g.pageIndex = pageIndex;
+	g.allocationOffset = allocationOffset;
+	g.allocationSize = allocationSize;
 
-	g.vb = CreateUploadBuffer(mesh.vertices.data(), vbsize);
-	g.ib = CreateUploadBuffer(mesh.indices.data(), ibsize);
-	if (!g.vb || !g.ib)return;
-
-	g.vbv = { g.vb->GetGPUVirtualAddress(),vbsize,sizeof(Vertex) };
-	g.ibv = { g.ib->GetGPUVirtualAddress(),ibsize,DXGI_FORMAT_R32_UINT };
-	g.indexCount = UINT(mesh.indices.size());
-
-	m_meshes[id] = std::move(g);
+	auto existing = m_meshes.find(id);
+	if (existing != m_meshes.end())
+	{
+		const GpuMesh old = existing->second;
+		existing->second = g;
+		FreeMeshAllocation(old);
+	}
+	else m_meshes.emplace(id, g);
 }
 
 void DX12Renderer::RemoveMesh(uint32_t id)
 {
-	WaitForGPU();
-	m_meshes.erase(id);
+	if (m_frameActive || !WaitForGPU())return;
+	auto it = m_meshes.find(id);
+	if (it == m_meshes.end())return;
+	FreeMeshAllocation(it->second);
+	m_meshes.erase(it);
 }
 
 void DX12Renderer::SetCamera(const DirectX::XMFLOAT4X4& view, const DirectX::XMFLOAT4X4& proj)
 {
-	m_view = view;
-	m_proj = proj;
+	XMStoreFloat4x4(&m_view, XMMatrixTranspose(XMLoadFloat4x4(&view)));
+	XMStoreFloat4x4(&m_proj, XMMatrixTranspose(XMLoadFloat4x4(&proj)));
 }
 
 void DX12Renderer::BeginFrame()
 {
+	m_frameActive = false;
+	if (!WaitForGPU())return;
 	m_frameIndex = m_swapchain->GetCurrentBackBufferIndex();
 
-	m_allocator->Reset();
-	m_cmdList->Reset(m_allocator.Get(), m_pso.Get());
+	HRESULT hr = m_allocator->Reset();
+	if (FAILED(hr)) { LogError("CommandAllocator::Reset", hr); return; }
+	hr = m_cmdList->Reset(m_allocator.Get(), m_pso.Get());
+	if (FAILED(hr)) { LogError("CommandList::Reset", hr); return; }
+	m_frameActive = true;
+	m_cmdList->EndQuery(
+		m_timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
 
 	D3D12_RESOURCE_BARRIER toRT = Transition(m_rtvs[m_frameIndex].Get(),
 		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -415,14 +643,15 @@ void DX12Renderer::BeginFrame()
 
 void DX12Renderer::Draw(uint32_t meshid, const DirectX::XMFLOAT4X4& world)
 {
+	if (!m_frameActive)return;
 	auto it = m_meshes.find(meshid);
 	if (it == m_meshes.end())return;
 	const GpuMesh& g = it->second;
 
 	CBData cb;
 	XMStoreFloat4x4(&cb.world, XMMatrixTranspose(XMLoadFloat4x4(&world)));
-	XMStoreFloat4x4(&cb.view, XMMatrixTranspose(XMLoadFloat4x4(&m_view)));
-	XMStoreFloat4x4(&cb.proj, XMMatrixTranspose(XMLoadFloat4x4(&m_proj)));
+	cb.view = m_view;
+	cb.proj = m_proj;
 
 	m_cmdList->SetGraphicsRoot32BitConstants(0, sizeof(CBData) / 4, &cb, 0);
 
@@ -433,14 +662,39 @@ void DX12Renderer::Draw(uint32_t meshid, const DirectX::XMFLOAT4X4& world)
 
 void DX12Renderer::EndFrame()
 {
-	D3D12_RESOURCE_BARRIER toPresent=Transition(m_rtvs[m_frameIndex].Get(),
-		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+	if (!m_frameActive)return;
+	m_frameActive = false;
+	D3D12_RESOURCE_BARRIER toPresent = Transition(
+		m_rtvs[m_frameIndex].Get(),
+		D3D12_RESOURCE_STATE_RENDER_TARGET,
+		D3D12_RESOURCE_STATE_PRESENT);
+
 	m_cmdList->ResourceBarrier(1, &toPresent);
-	m_cmdList->Close();
+
+	m_cmdList->EndQuery(
+		m_timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+
+	m_cmdList->ResolveQueryData(
+		m_timestampHeap.Get(),
+		D3D12_QUERY_TYPE_TIMESTAMP,
+		0, 2,
+		m_timestampReadback.Get(),
+		0);
+
+	HRESULT hr = m_cmdList->Close();
+	if (FAILED(hr)) { LogError("CommandList::Close", hr); return; }
 
 	ID3D12CommandList* lists[] = { m_cmdList.Get() };
+	m_gpuIdle = false;
 	m_queue->ExecuteCommandLists(1, lists);
 
-	m_swapchain->Present(1, 0);
-	WaitForGPU();
+	// SyncInterval 1 follows the refresh rate of the display showing this window.
+	hr = m_swapchain->Present(1, 0);
+	if (FAILED(hr))LogError("SwapChain::Present", hr);
+	if (WaitForGPU())
+	{
+		// Read timestamps only after the resolve has completed.
+		ReadGpuTimer();
+	}
+	else m_gpuMs = -1.0;
 }

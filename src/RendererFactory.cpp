@@ -7,7 +7,7 @@ std::unique_ptr<IRenderer>CreateRenderer(GraphicAPI api)
 {
 	switch (api)
 	{
-	case GraphicAPI::DX11: return std::make_unique<DirectX11Renderer>();
+	case GraphicAPI::DX11: return std::make_unique<DX11Renderer>();
 	case GraphicAPI::DX12: return std::make_unique<DX12Renderer>();
 	}
 	return nullptr;

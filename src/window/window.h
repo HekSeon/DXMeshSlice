@@ -10,6 +10,7 @@ public:
 	bool ConsumeResize(uint32_t& w, uint32_t& h);
 	bool ConsumeLine(int& x0, int& y0, int& x1, int& y1);
 	bool ConsumeOrbit(int& dx, int& dy);
+	bool ConsumeZoom(float& steps);
 
 	HWND GetHandle() const { return m_hwnd; }
 	uint32_t Width() const { return m_width; }
@@ -31,4 +32,5 @@ private:
 	bool m_orbiting = false;
 	int m_lastX = 0, m_lastY = 0;
 	int m_orbitDx = 0, m_orbitDy = 0;
+	float m_zoomSteps = 0.0f;
 };

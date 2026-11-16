@@ -8,7 +8,7 @@
 
 using Microsoft::WRL::ComPtr;
 
-class DirectX11Renderer : public IRenderer
+class DX11Renderer : public IRenderer
 {
 public:
 	bool Initialize(HWND hwnd, uint32_t width, uint32_t height) override;
@@ -24,6 +24,7 @@ public:
 	void BeginFrame() override;
 	void Draw(uint32_t meshid, const DirectX::XMFLOAT4X4& world)override;
 	void EndFrame() override;
+	double GpuMilliseconds() const override { return m_gpuMs; }
 
 private:
 	struct GpuMesh
@@ -44,6 +45,18 @@ private:
 	void CreateDepthBuffer();
 	bool CreateShaders();
 	bool CreatePipelineStates();
+	bool CreateGpuTimers();
+	void ReadGpuTimers();
+
+	struct GpuTimer
+	{
+		ComPtr<ID3D11Query> disjoint, start, end;
+	};
+	static constexpr UINT kTimerCount = 4;
+	GpuTimer m_timers[kTimerCount];
+	UINT m_timerRead = 0, m_timerWrite = 0, m_timerPending = 0;
+	bool m_timerActive = false;
+	double m_gpuMs = -1.0;
 
 	ComPtr<ID3D11Device>					m_device;
 	ComPtr<ID3D11DeviceContext>				m_context;

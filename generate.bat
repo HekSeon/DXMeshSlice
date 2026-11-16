@@ -1,7 +1,7 @@
 @echo off
 echo CMake yapilandirmasi baslatiliyor...
 
-cmake -S . -B build -G "Visual Studio 18 2026" -A x64
+cmake -S . -B build -A x64
 
 if %ERRORLEVEL% NEQ 0 (
     echo HATA: CMake yapilandirmasi basarisiz oldu.
@@ -10,5 +10,5 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo Basarili! build\DXPlaneGame.sln dosyasini acabilirsin.
+echo Basarili! build\DXMeshSlice.sln dosyasini acabilirsin.
 pause

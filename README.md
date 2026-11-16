@@ -28,6 +28,8 @@ https://github.com/user-attachments/assets/605e5e24-734d-4c97-ac17-54cf603c8ba3
 | Input | Action |
 | --- | --- |
 | Left mouse drag | Draw a cut line, release to slice |
+| Right mouse drag | Orbit the camera |
+| Mouse wheel | Zoom in/out (camera distance limited to 1.5–20 units) |
 | `R` | Reset to a whole sphere |
 
 ## Build
@@ -48,6 +50,16 @@ cmake ..
 cmake --build . --config Debug
 ```
 
+For performance measurements, build and run `Release`:
+
+```bat
+cmake --build build --config Release
+build\Release\DXMeshSlice.exe
+```
+
+The startup log identifies Debug or Release. Each drag prints one `cut` duration, with separate `slice` and GPU mesh resource update durations. The total excludes the console output and frame rendering. The HUD frame wall duration includes message processing, rendering, and synchronization (including VSync). Compare the same
+cuts and build configuration; piece count alone does not describe mesh complexity.
+
 You can also open the folder directly in Visual Studio (CMake project) and run it from there.
 The repository includes `generate.bat` and `clean.bat` helper scripts for generating and cleaning the build directory.
 
@@ -63,7 +75,11 @@ Graphic API selector:
 
 ### Rendering abstraction
 
-The application only talks to an `IRenderer` interface. `DirectX11Renderer` and `DX12Renderer` implement it,
+`Engine` owns the window, camera, scene, and renderer lifecycle. `MeshScene` manages
+pieces and slicing; `OrbitCamera` owns camera movement and screen-line conversion.
+`main()` selects the API and starts the engine.
+
+The engine and scene only talk to an `IRenderer` interface. `DirectX11Renderer` and `DX12Renderer` implement it,
 and `RendererFactory` returns the one chosen at startup. Mesh data (`Mesh`, `Vertex`) contains no DirectX types.
 
 ```
@@ -86,11 +102,21 @@ so a sphere looks identical on both APIs. The DX12 path uses root constants for 
    and a triangle fan is built with flat normals facing outward on each half.
 5. **Repeat.** Each resulting half becomes its own piece with its own GPU buffers and can be cut again.
 
+Piece bounds reject planes that cannot reach a piece before triangle processing.
+Vertex distances are calculated once per slice. Original vertices and edge intersections
+are reused within each output mesh. Triangle clipping uses fixed-size index arrays,
+and cap points are deduplicated and sorted once for both halves. Each cap point angle
+is calculated once before sorting.
+Planes that only touch a piece do not create another piece.
+
 ## Project structure
 
 ```
 src/
- ├── main.cpp              application loop, line to plane conversion
+ ├── main.cpp              API selection and engine entry point
+ ├── Engine.*              application lifecycle, update/render loop
+ ├── OrbitCamera.*         orbit camera, screen line to plane
+ ├── MeshScene.*           pieces, bounds, slicing and mesh uploads
  ├── Window.h/.cpp         Win32 window, mouse line capture
  ├── IRenderer.h           renderer interface
  ├── RendererFactory.*     creates DX11 or DX12 renderer
@@ -106,10 +132,11 @@ src/
 
 ## Known limitations
 
-- DX12 renderer waits for the GPU every frame and when meshes are uploaded or removed (simple and safe, not optimized)
-- Meshes are uploaded through upload heaps on DX12 instead of default heaps
+- DX12 renderer still waits for the GPU at frame end; mesh updates reuse confirmed GPU-idle state and shared mapped upload pages
+- DX12 upload pages are retained until shutdown; mesh buffers remain in upload heaps instead of staged default-heap resources
 - Pieces are only translated apart, no physics
 - Many cuts increase the vertex count; very high tessellation may slow down repeated slicing
+- Cap triangulation assumes a single convex outline, as produced by cutting a sphere; arbitrary concave meshes and holes are not supported
 
 ## Possible next steps
 

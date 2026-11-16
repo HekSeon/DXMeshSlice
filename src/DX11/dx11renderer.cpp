@@ -12,7 +12,7 @@ using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 
 
-bool DirectX11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height)
+bool DX11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height)
 {
 	DXGI_SWAP_CHAIN_DESC sd{};
 	sd.BufferCount = 2;
@@ -55,6 +55,7 @@ bool DirectX11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height)
 	CreateDepthBuffer();
 	if (!CreateShaders())			return false;
 	if (!CreatePipelineStates())	return false;
+	if (!CreateGpuTimers())		return false;
 
 	XMStoreFloat4x4(&m_view, XMMatrixIdentity());
 	XMStoreFloat4x4(&m_proj, XMMatrixIdentity());
@@ -62,14 +63,14 @@ bool DirectX11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height)
 	return true;
 }
 
-void DirectX11Renderer::CreateRendererTarget()//<==========renderer target creating
+void DX11Renderer::CreateRendererTarget()//<==========renderer target creating
 {
 	ComPtr<ID3D11Texture2D> backBuffer;
 	m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
 	m_device->CreateRenderTargetView(backBuffer.Get(), nullptr, &m_rtv);
 }
 
-void DirectX11Renderer::CreateDepthBuffer()
+void DX11Renderer::CreateDepthBuffer()
 {
 	D3D11_TEXTURE2D_DESC	d{};
 	d.Width					= m_width;
@@ -107,7 +108,7 @@ static bool Compile(const char* entry, const char* target, ComPtr<ID3DBlob>& out
 	return true;
 }
 
-bool DirectX11Renderer::CreateShaders()
+bool DX11Renderer::CreateShaders()
 {
 	ComPtr<ID3DBlob> vsBlob, psBlob;
 	if (!Compile("VSMain", "vs_5_0", vsBlob)) return false;
@@ -129,7 +130,7 @@ bool DirectX11Renderer::CreateShaders()
 	return true;
 }
 
-bool DirectX11Renderer::CreatePipelineStates()
+bool DX11Renderer::CreatePipelineStates()
 {
 	D3D11_BUFFER_DESC cb{};
 	cb.ByteWidth = sizeof(CBData);
@@ -148,7 +149,54 @@ bool DirectX11Renderer::CreatePipelineStates()
 
 }
 
-void DirectX11Renderer::Resize(uint32_t width, uint32_t height) //<====Resizing window
+bool DX11Renderer::CreateGpuTimers()
+{
+	for (GpuTimer& timer : m_timers)
+	{
+		D3D11_QUERY_DESC desc{};
+		desc.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+		HRESULT hr = m_device->CreateQuery(&desc, &timer.disjoint);
+		if (FAILED(hr)) { LogError("CreateQuery(disjoint)", hr); return false; }
+		desc.Query = D3D11_QUERY_TIMESTAMP;
+		hr = m_device->CreateQuery(&desc, &timer.start);
+		if (FAILED(hr)) { LogError("CreateQuery(start)", hr); return false; }
+		hr = m_device->CreateQuery(&desc, &timer.end);
+		if (FAILED(hr)) { LogError("CreateQuery(end)", hr); return false; }
+	}
+	return true;
+}
+
+void DX11Renderer::ReadGpuTimers()
+{
+	// Hazir olmayan sonucu bekleme ve kullanimdaki sorguyu tekrar yazma.
+	while (m_timerPending > 0)
+	{
+		GpuTimer& timer = m_timers[m_timerRead];
+		D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+		UINT64 start = 0, end = 0;
+		HRESULT hr = m_context->GetData(timer.disjoint.Get(), &disjoint,
+			sizeof(disjoint), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+		if (hr == S_FALSE)return;
+		if (SUCCEEDED(hr) && !disjoint.Disjoint && disjoint.Frequency != 0)
+		{
+			hr = m_context->GetData(timer.start.Get(), &start, sizeof(start), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+			if (hr == S_FALSE)return;
+			if (SUCCEEDED(hr))
+			{
+				hr = m_context->GetData(timer.end.Get(), &end, sizeof(end), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+				if (hr == S_FALSE)return;
+			}
+			m_gpuMs = SUCCEEDED(hr) && end >= start
+				? double(end - start) * 1000.0 / double(disjoint.Frequency) : -1.0;
+		}
+		else m_gpuMs = -1.0;
+		if (FAILED(hr))LogError("GetData(timestamp)", hr);
+		m_timerRead = (m_timerRead + 1) % kTimerCount;
+		--m_timerPending;
+	}
+}
+
+void DX11Renderer::Resize(uint32_t width, uint32_t height) //<====Resizing window
 {
 	if (!m_swapChain || width == 0 || height == 0) return;
 	m_context->OMSetRenderTargets(0, nullptr, nullptr);
@@ -161,8 +209,15 @@ void DirectX11Renderer::Resize(uint32_t width, uint32_t height) //<====Resizing 
 	CreateDepthBuffer();
 }
 
-void DirectX11Renderer::Shutdown() //<=======Clear
+void DX11Renderer::Shutdown() //<=======Clear
 {
+	for (GpuTimer& timer : m_timers)
+	{
+		timer.disjoint.Reset();timer.start.Reset();timer.end.Reset();
+	}
+	m_timerRead = m_timerWrite = m_timerPending = 0;
+	m_timerActive = false;
+	m_gpuMs = -1.0;
 	m_meshes.clear();
 	m_raster.Reset(); m_cb.Reset(); m_layout.Reset();
 	m_ps.Reset(); m_vs.Reset();
@@ -173,8 +228,16 @@ void DirectX11Renderer::Shutdown() //<=======Clear
 	m_device.Reset();
 }
 
-void DirectX11Renderer::BeginFrame() //<=====FrameCount start
+void DX11Renderer::BeginFrame() //<=====FrameCount start
 {
+	ReadGpuTimers();
+	m_timerActive = m_timerPending < kTimerCount;
+	if (m_timerActive)
+	{
+		GpuTimer& timer = m_timers[m_timerWrite];
+		m_context->Begin(timer.disjoint.Get());
+		m_context->End(timer.start.Get());
+	}
 
 	const float clear[4] = { 0.08f,0.08f,0.12f,1.0f };
 	m_context->OMSetRenderTargets(1, m_rtv.GetAddressOf(), m_dsv.Get());
@@ -183,14 +246,31 @@ void DirectX11Renderer::BeginFrame() //<=====FrameCount start
 
 	D3D11_VIEWPORT vp{ 0, 0, (float)m_width, (float)m_height, 0.0f, 1.0f };
 	m_context->RSSetViewports(1, &vp);
+	m_context->IASetInputLayout(m_layout.Get());
+	m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	m_context->VSSetShader(m_vs.Get(), nullptr, 0);
+	m_context->PSSetShader(m_ps.Get(), nullptr, 0);
+	m_context->VSSetConstantBuffers(0, 1, m_cb.GetAddressOf());
+	m_context->RSSetState(m_raster.Get());
 }
 
-void DirectX11Renderer::EndFrame() //<=====framecount end
+void DX11Renderer::EndFrame() //<=====framecount end
 {
-	m_swapChain->Present(1, 0);
+	if (m_timerActive)
+	{
+		GpuTimer& timer = m_timers[m_timerWrite];
+		m_context->End(timer.end.Get());
+		m_context->End(timer.disjoint.Get());
+		m_timerWrite = (m_timerWrite + 1) % kTimerCount;
+		++m_timerPending;
+		m_timerActive = false;
+	}
+	// SyncInterval 1 follows the refresh rate of the display showing this window.
+	HRESULT hr = m_swapChain->Present(1, 0);
+	if (FAILED(hr))LogError("SwapChain::Present", hr);
 }
 
-void DirectX11Renderer::UploadMesh(uint32_t id, const Mesh& mesh) 
+void DX11Renderer::UploadMesh(uint32_t id, const Mesh& mesh) 
 {
 	GpuMesh g;
 	D3D11_BUFFER_DESC bd{};
@@ -210,29 +290,22 @@ void DirectX11Renderer::UploadMesh(uint32_t id, const Mesh& mesh)
 	g.indexCount = UINT(mesh.indices.size());
 	m_meshes[id] = std::move(g);
 }
-void DirectX11Renderer::RemoveMesh(uint32_t id) { m_meshes.erase(id); }
-void DirectX11Renderer::SetCamera(const DirectX::XMFLOAT4X4& view, const DirectX::XMFLOAT4X4& proj) 
+void DX11Renderer::RemoveMesh(uint32_t id) { m_meshes.erase(id); }
+void DX11Renderer::SetCamera(const DirectX::XMFLOAT4X4& view, const DirectX::XMFLOAT4X4& proj) 
 {
-	m_view = view;
-	m_proj = proj;
+	XMStoreFloat4x4(&m_view, XMMatrixTranspose(XMLoadFloat4x4(&view)));
+	XMStoreFloat4x4(&m_proj, XMMatrixTranspose(XMLoadFloat4x4(&proj)));
 }
-void DirectX11Renderer::Draw(uint32_t meshId, const DirectX::XMFLOAT4X4& world) 
+void DX11Renderer::Draw(uint32_t meshId, const DirectX::XMFLOAT4X4& world) 
 {
 	auto it = m_meshes.find(meshId);
 	if (it == m_meshes.end()) return;
 	const GpuMesh& g = it->second;
 	CBData cb;
 	XMStoreFloat4x4(&cb.world, XMMatrixTranspose(XMLoadFloat4x4(&world)));
-	XMStoreFloat4x4(&cb.view, XMMatrixTranspose(XMLoadFloat4x4(&m_view)));
-	XMStoreFloat4x4(&cb.proj, XMMatrixTranspose(XMLoadFloat4x4(&m_proj)));
+	cb.view = m_view;
+	cb.proj = m_proj;
 	m_context->UpdateSubresource(m_cb.Get(), 0, nullptr, &cb, 0, 0);
-
-	m_context->IASetInputLayout(m_layout.Get());
-	m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	m_context->VSSetShader(m_vs.Get(), nullptr, 0);
-	m_context->PSSetShader(m_ps.Get(), nullptr, 0);
-	m_context->VSSetConstantBuffers(0, 1, m_cb.GetAddressOf());
-	m_context->RSSetState(m_raster.Get());
 
 	UINT stride = sizeof(Vertex), offset = 0;
 	m_context->IASetVertexBuffers(0, 1, g.vb.GetAddressOf(), &stride, &offset);

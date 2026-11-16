@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-set(CMAKE_SYSTEM_VERSION "10.0.26100.0" CACHE STRING "" FORCE)
+set(CMAKE_SYSTEM_VERSION "10.0.26100.0" CACHE STRING "Windows SDK version")
 project(DXMeshSlice CXX)
 
 set(CMAKE_CXX_STANDARD 20)

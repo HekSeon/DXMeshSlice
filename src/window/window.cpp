@@ -19,7 +19,7 @@ bool Window::Create(const wchar_t* title, uint32_t width, uint32_t height)
 	AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
 
 	m_width = width; m_height = height;
-	m_hwnd = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPEDWINDOW,
+	m_hwnd = CreateWindowExW(0, wc.lpszClassName, title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
 		CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left,
 		rc.bottom - rc.top, nullptr, nullptr, inst, this);
 	if (!m_hwnd) return false;
@@ -66,6 +66,14 @@ bool Window::ConsumeOrbit(int& dx, int& dy)
 	if (m_orbitDx == 0 && m_orbitDy == 0)return false;
 	dx = m_orbitDx;	dy = m_orbitDy;
 	m_orbitDx = m_orbitDy = 0;
+	return true;
+}
+
+bool Window::ConsumeZoom(float& steps)
+{
+	if (m_zoomSteps == 0.0f)return false;
+	steps = m_zoomSteps;
+	m_zoomSteps = 0.0f;
 	return true;
 }
 
@@ -135,8 +143,15 @@ LRESULT Window::HandleMessage(HWND h, UINT m, WPARAM wp, LPARAM lp)
 		m_lastY = GET_Y_LPARAM(lp);
 		SetCapture(h);
 		return 0;
+	case WM_MOUSEWHEEL:
+		m_zoomSteps += float(GET_WHEEL_DELTA_WPARAM(wp)) / float(WHEEL_DELTA);
+		return 0;
 	case WM_RBUTTONUP:
 		if (m_orbiting) { m_orbiting = false;ReleaseCapture(); }
+		return 0;
+	case WM_CAPTURECHANGED:
+		m_dragging = false;
+		m_orbiting = false;
 		return 0;
 	}
 		

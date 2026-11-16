@@ -3,7 +3,7 @@
 #include <Windows.h>
 #include <DirectXMath.h>
 #include <cstdint>
-#include "Mesh.h"
+#include "Mesh/Mesh.h"
 
 class IRenderer
 {
@@ -23,6 +23,10 @@ public:
 	virtual void BeginFrame() = 0;
 	virtual void Draw(uint32_t meshId, const DirectX::XMFLOAT4X4& world) = 0;
 	virtual void EndFrame() = 0;
+
+	virtual double GpuMilliseconds() const { return -1.0; }
+
+
 
 private:
 
